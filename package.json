@@ -15,6 +15,7 @@
     "@google/genai": "^1.46.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "google-auth-library": "^10.6.2"
+    "google-auth-library": "^10.6.2",
+    "oauth": "^0.10.2"
   }
 }

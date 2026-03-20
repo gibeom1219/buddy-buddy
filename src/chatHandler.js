@@ -1,5 +1,8 @@
 const { OAuth2Client } = require('google-auth-library');
-const { startChat, sendMessage } = require('./vertexai');
+const { startChat, sendMessage, generateJQL, analyzeJiraResults } = require('./vertexai');
+const { searchIssues, issuesToText } = require('./jira');
+const { initiateOAuth } = require('./jiraOAuth');
+const { getAccessToken } = require('./oauthStore');
 
 const authClient = new OAuth2Client();
 
@@ -65,6 +68,7 @@ async function handleEvent(req, res) {
     const messageData = chat.messagePayload.message;
     const question = (messageData.argumentText || messageData.text)?.trim();
     const spaceName = messageData.space?.name || 'default';
+    const userId = chat.user?.name || 'unknown';
 
     console.log(`이벤트: MESSAGE | 스페이스: ${spaceName}`);
     console.log(`질문: ${question}`);
@@ -74,7 +78,30 @@ async function handleEvent(req, res) {
     }
 
     try {
-      // 스페이스별 대화 세션 유지
+      // 1단계: Jira 검색 필요 여부 판단 및 JQL 생성
+      const jql = await generateJQL(question);
+
+      if (jql) {
+        console.log(`[Jira 검색] JQL: ${jql}`);
+
+        // 사용자 토큰 확인
+        const tokenData = getAccessToken(userId);
+        if (!tokenData) {
+          const authUrl = await initiateOAuth(userId);
+          return res.json(chatResponse(
+            `Jira 검색을 위해 인증이 필요합니다.\n아래 링크를 클릭해서 Jira 계정으로 로그인해주세요:\n${authUrl}\n\n인증 완료 후 다시 질문해주세요.`
+          ));
+        }
+
+        const issues = await searchIssues(jql, userId);
+        const context = issuesToText(issues);
+        console.log(`[Jira 검색] ${issues.length}개 이슈 검색됨`);
+        const answer = await analyzeJiraResults(question, context);
+        console.log(`답변 생성 완료 (${answer.length}자)`);
+        return res.json(chatResponse(answer));
+      }
+
+      // 2단계: 일반 질문 → 대화 세션으로 처리
       if (!chatSessions.has(spaceName)) {
         chatSessions.set(spaceName, startChat());
         console.log(`[새 대화 시작] ${spaceName}`);
@@ -88,7 +115,7 @@ async function handleEvent(req, res) {
       console.log(`답변 생성 완료 (${answer.length}자)`);
       return res.json(chatResponse(answer));
     } catch (err) {
-      console.error('Vertex AI 오류:', err.message);
+      console.error('오류:', err.message);
       return res.json(chatResponse('죄송합니다, 답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'));
     }
   }
